@@ -1,628 +1,414 @@
-<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Наборы GCD</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bitter:wght@600;700&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
-<style>
-/* ====== НАСТРОЙКА: вставьте адрес веб-приложения Apps Script ====== */
-/* см. строку с API_URL в скрипте ниже */
+/**
+ * GCD — Наборы в КИ. Единый бэкенд на Google Apps Script.
+ *
+ * Делает три вещи:
+ *   1) Хранит данные протоколов в этой Google-таблице
+ *   2) Отдаёт их Mini App в виде JSON
+ *   3) Работает вебхуком Telegram-бота: верификация врача, одобрение заявок
+ *      на вступление в канал, дип-линки протоколов, приём направлений
+ *
+ * Установка — по рунбуку. Порядок функций для запуска вручную:
+ *   setup()          — один раз, создаёт листы и заполняет пример
+ *   setWebhook()     — после публикации веб-приложения
+ *   removeWebhook()  — если нужно отключить бота
+ */
 
-:root{
-  --bg:#f2f5f6;--card:#fff;--card-2:#eaeff1;--ink:#131a20;--ink-2:#4a5763;--ink-3:#7c8995;
-  --rule:#dde4e8;--accent:#0f6169;--accent-ink:#fff;--accent-soft:#deecee;
-  --ok:#256b46;--ok-soft:#e0efe7;--stop:#943124;--stop-soft:#f7e6e2;--warn:#8a5a10;--warn-soft:#f8eeda;
-  --onc:#6f4a8e;--derm:#a85d2e;--neuro:#2f5f96;--endo:#1b7358;--ibd:#9d4150;--psy:#4c5885;--other:#0f6169;
+/* ============ НАСТРОЙКИ ============
+   Заполняются в Project Settings → Script Properties, а не здесь.
+   BOT_TOKEN   — токен от BotFather
+   CHANNEL_ID  — id канала со знаком минус, например -1001234567890
+   ADMIN_CHAT  — ваш личный chat_id, туда падают уведомления
+   SECRET      — любая случайная строка, защищает вебхук
+   WEBAPP_URL  — адрес Mini App на GitHub Pages
+*/
+function prop_(k) { return PropertiesService.getScriptProperties().getProperty(k) || ''; }
+function TOKEN_()   { return prop_('BOT_TOKEN'); }
+function CHANNEL_() { return prop_('CHANNEL_ID'); }
+function ADMIN_()   { return prop_('ADMIN_CHAT'); }
+function SECRET_()  { return prop_('SECRET'); }
+function WEBAPP_()  { return prop_('WEBAPP_URL'); }
+
+var SH_PROTO = 'Протоколы';
+var SH_CRIT  = 'Критерии';
+var SH_REF   = 'Заявки';
+var SH_DOC   = 'Врачи';
+var SH_STATE = '_Состояния';
+
+/* ============ 1. УСТАНОВКА ============ */
+
+function setup() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  var proto = sheet_(ss, SH_PROTO, [
+    'Код', 'Активен', 'Нозология', 'Профиль', 'Город', 'Центр', 'Исследователь',
+    'Заголовок', 'Портрет кандидата', 'Фаза', 'Дизайн', 'Препарат',
+    'Возраст от', 'Возраст до', 'Мест всего', 'Включено', 'Набор до',
+    'Что получает пациент', 'Окна отмывки', 'Координатор', 'Телефон'
+  ]);
+
+  var crit = sheet_(ss, SH_CRIT, ['Код протокола', 'Тип', 'Текст', 'Пояснение']);
+
+  sheet_(ss, SH_REF, [
+    'Время', 'Код заявки', 'Код протокола', 'Telegram ID', 'Врач',
+    'Специальность', 'ЛПУ', 'Контакт', 'Описание случая', 'Этап', 'Комментарий'
+  ]);
+
+  sheet_(ss, SH_DOC, [
+    'Время', 'Telegram ID', 'Username', 'ФИО', 'Специальность', 'ЛПУ', 'Статус'
+  ]);
+
+  sheet_(ss, SH_STATE, ['Telegram ID', 'Шаг', 'Черновик']);
+
+  // Пример: язвенный колит, НОКБ. Замените фактические поля на свои.
+  if (proto.getLastRow() < 2) {
+    proto.appendRow([
+      'GCD-НОКБ-08', 'да', 'ibd', 'Гастроэнтерология', 'Великий Новгород',
+      'ГОБУЗ «НОКБ»', 'Абдулин А.А., врач-гастроэнтеролог',
+      'Язвенный колит, среднетяжёлая и тяжёлая активная форма',
+      '18–75 лет · mMS 4–9 (эндо-субшкала ≥2, кровь в стуле ≥1) · поражение толстой кишки проксимальнее прямой (≥15 см от ануса) · диагноз ≥3 мес, подтверждён эндоскопически',
+      'II фаза', 'Рандомизированное', 'Исследуемый препарат',
+      18, 75, 5, 0, '31.12.2026',
+      'Скрининг и все обследования — за счёт исследования, в центре. Наблюдение врача-гастроэнтеролога по графику протокола.',
+      'Ингибиторы JAK — 2 нед · анти-ФНО — 8 нед · модуляторы S1P — 10 нед · анти-интегрины и анти-ИЛ-12/23 — 12 нед до рандомизации. Ректальные 5-АСК — 2 нед до подписания согласия.',
+      '', ''
+    ]);
+
+    var rows = [
+      ['вкл', '18–75 лет на момент подписания согласия', ''],
+      ['вкл', 'Диагноз ЯК установлен ≥3 мес, подтверждён эндоскопически, с вовлечением толстой кишки проксимальнее прямой', '≥15 см от ануса'],
+      ['вкл', 'Активность: mMS 4–9, эндоскопическая субшкала ≥2, кровь в стуле ≥1', ''],
+      ['вкл', 'Неадекватный ответ, стероидозависимость, потеря ответа или непереносимость ГКС, иммуносупрессоров либо биопрепаратов', 'АЗА, 6-МП, анти-ФНО, анти-интегрины, анти-ИЛ-12/23, ингибиторы JAK, модуляторы S1P'],
+      ['вкл', 'Сопутствующая терапия стабильна: ГКС и 5-АСК ≥2 нед, иммуносупрессоры ≥4 нед до рандомизации', ''],
+      ['искл', 'Неопределённый, ишемический, лучевой, микроскопический колит; осложнённый дивертикулит; болезнь Крона', 'самая частая причина отказа'],
+      ['искл', 'Кишечная стома или потребность в ней', 'рефералы упускают'],
+      ['искл', 'Неэффективность ≥3 классов биологической или таргетной терапии, либо ≥4 препаратов суммарно', 'рефералы упускают'],
+      ['искл', 'ВИЧ, гепатит B/C, туберкулёз в том числе в анамнезе, активная ЦМВ-инфекция, C. difficile', ''],
+      ['искл', 'Фульминантный колит, токсическая дилатация, непроходимость или перфорация в анамнезе', ''],
+      ['искл', 'Беременность, планирование беременности, лактация', '']
+    ];
+    rows.forEach(function (r) { crit.appendRow(['GCD-НОКБ-08', r[0], r[1], r[2]]); });
+  }
+
+  var d = ss.getSheetByName('Sheet1') || ss.getSheetByName('Лист1');
+  if (d && ss.getSheets().length > 1) ss.deleteSheet(d);
+
+  SpreadsheetApp.getUi().alert('Готово. Листы созданы, пример протокола добавлен.');
 }
-html[data-dark="1"]{
-  --bg:#0f151b;--card:#182028;--card-2:#212b34;--ink:#e6ecf0;--ink-2:#aeb9c3;--ink-3:#7f8d99;
-  --rule:#2a343d;--accent:#54b4bd;--accent-ink:#06282c;--accent-soft:#12323a;
-  --ok:#6dc093;--ok-soft:#152d22;--stop:#e08472;--stop-soft:#33201c;--warn:#d7a648;--warn-soft:#302512;
-  --onc:#b18ccb;--derm:#d99a6b;--neuro:#79a6d8;--endo:#5fbf9b;--ibd:#d98a95;--psy:#94a0cd;--other:#54b4bd;
+
+function sheet_(ss, name, headers) {
+  var s = ss.getSheetByName(name);
+  if (!s) s = ss.insertSheet(name);
+  if (s.getLastRow() === 0) {
+    s.appendRow(headers);
+    s.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8eef0');
+    s.setFrozenRows(1);
+  }
+  return s;
 }
-*{box-sizing:border-box}
-html,body{height:100%}
-body{
-  margin:0;background:var(--bg);color:var(--ink);
-  font-family:"Golos Text","Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.55;
-  -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;
-  padding-top:env(safe-area-inset-top);
+
+/* ============ 2. JSON-API ДЛЯ MINI APP ============ */
+
+function doGet(e) {
+  var action = (e && e.parameter && e.parameter.action) || 'protocols';
+  try {
+    if (action === 'protocols') return json_({ ok: true, protocols: readProtocols_() });
+    if (action === 'referrals') return json_({ ok: true, referrals: readReferrals_(e.parameter.uid) });
+    return json_({ ok: false, error: 'unknown action' });
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  }
 }
-.view{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
-.pad{padding:14px 14px 22px}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
-.chips{display:flex;gap:7px;overflow-x:auto;padding:12px 14px 4px;scrollbar-width:none}
-.chips::-webkit-scrollbar{display:none}
-.chip{flex:none;border:1px solid var(--rule);background:var(--card);color:var(--ink-2);
-  padding:6px 13px;border-radius:999px;font-family:inherit;font-size:13px;font-weight:500;
-  cursor:pointer;transition:background .16s,color .16s,border-color .16s,transform .12s;white-space:nowrap}
-.chip:active{transform:scale(.95)}
-.chip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.chip.dot::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
-  background:var(--c,var(--accent));margin-right:7px;vertical-align:1px}
-.chip.on.dot::before{background:var(--accent-ink)}
-
-.card{background:var(--card);border:1px solid var(--rule);border-radius:15px;padding:14px 15px;
-  margin-bottom:11px;position:relative;overflow:hidden;cursor:pointer;
-  transition:transform .14s ease;animation:rise .34s cubic-bezier(.22,.9,.3,1) both}
-.card:active{transform:scale(.982)}
-.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--accent))}
-@keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
-.toprow{display:flex;align-items:center;gap:8px;margin-bottom:7px}
-.noz{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;
-  font-weight:600;color:var(--c,var(--accent))}
-.pill{margin-left:auto;font-size:10px;font-weight:600;letter-spacing:.04em;padding:2.5px 8px;
-  border-radius:999px;background:var(--ok-soft);color:var(--ok);white-space:nowrap}
-.pill.last{background:var(--warn-soft);color:var(--warn)}
-.pill.shut{background:var(--card-2);color:var(--ink-3)}
-.card h3{font-size:15.5px;font-weight:600;margin:0 0 5px;letter-spacing:-.012em;line-height:1.3;color:var(--ink)}
-.where{font-size:12.5px;color:var(--ink-3);margin:0 0 11px}
-.where b{color:var(--ink-2);font-weight:500}
-.bar{height:4px;border-radius:3px;background:var(--card-2);overflow:hidden;margin-bottom:6px}
-.bar i{display:block;height:100%;border-radius:3px;background:var(--c,var(--accent));width:0;
-  transition:width .85s cubic-bezier(.2,.8,.25,1)}
-.slots{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-3);
-  font-family:"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
-.slots b{color:var(--ink-2);font-weight:600}
-.empty{text-align:center;padding:46px 20px;color:var(--ink-3)}
-.empty p{margin:0 0 4px;font-size:14px}
-.sk{background:var(--card);border:1px solid var(--rule);border-radius:15px;padding:14px 15px;margin-bottom:11px}
-.sk div{background:var(--card-2);border-radius:5px;height:10px;margin-bottom:9px;animation:pulse 1.15s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
-
-.hero{padding:16px 15px 15px;background:var(--card);border-bottom:1px solid var(--rule);position:relative;overflow:hidden}
-.hero::after{content:"";position:absolute;inset:0;pointer-events:none;
-  background:radial-gradient(120% 90% at 92% 0%,var(--c) 0%,transparent 62%);opacity:.13}
-.hero h2{font-family:"Bitter",Georgia,serif;font-size:21px;line-height:1.2;margin:8px 0 9px;
-  letter-spacing:-.015em;color:var(--ink);position:relative}
-.portrait{position:relative;font-size:13.5px;color:var(--ink-2);background:var(--accent-soft);
-  padding:11px 13px;border-radius:11px;margin:0 0 12px;line-height:1.5}
-.facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 13px;margin:0;position:relative}
-.facts dt{font-size:12px;color:var(--ink-3);white-space:nowrap}
-.facts dd{margin:0;font-size:13px;color:var(--ink-2);font-weight:500}
-.facts dd.mono{font-family:"JetBrains Mono",monospace;font-size:11.5px}
-.blind{display:inline-flex;align-items:center;gap:6px;margin-top:11px;position:relative;
-  font-size:11px;color:var(--ink-3);background:var(--card-2);padding:4px 10px;border-radius:999px}
-.blind svg{width:12px;height:12px;flex:none;stroke-width:2}
-
-.sect{padding:16px 15px 4px}
-.sect h4{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin:0 0 4px;font-weight:600}
-.sect .lead{font-size:13px;color:var(--ink-3);margin:0 0 12px}
-.sect .body{font-size:13.5px;color:var(--ink-2);margin:0 0 6px;line-height:1.55}
-
-.crit{list-style:none;padding:0;margin:0 0 4px}
-.crit li{display:flex;gap:11px;align-items:flex-start;padding:11px 13px;margin-bottom:7px;
-  background:var(--card);border:1px solid var(--rule);border-radius:12px;cursor:pointer;
-  transition:border-color .18s,background .18s}
-.crit li.yes{border-color:color-mix(in srgb,var(--ok) 45%,transparent);background:var(--ok-soft)}
-.crit li.no{border-color:color-mix(in srgb,var(--stop) 45%,transparent);background:var(--stop-soft)}
-.box{flex:none;width:19px;height:19px;border-radius:6px;border:1.6px solid var(--rule);margin-top:1px;
-  display:grid;place-items:center;background:var(--card);transition:all .2s cubic-bezier(.3,1.5,.5,1)}
-.crit li.yes .box{background:var(--ok);border-color:var(--ok);transform:scale(1.06)}
-.crit li.no .box{background:var(--stop);border-color:var(--stop);transform:scale(1.06)}
-.box svg{width:12px;height:12px;stroke:#fff;stroke-width:3;opacity:0;transition:opacity .16s}
-.crit li.yes .box svg.tick,.crit li.no .box svg.cross{opacity:1}
-.crit .txt{font-size:13.5px;line-height:1.45;color:var(--ink-2)}
-.crit .txt em{font-style:normal;color:var(--ink-3);font-size:12px;display:block;margin-top:2px}
-.crit li.excl .txt::before{content:"невключение";font-family:"JetBrains Mono",monospace;font-size:8.5px;
-  letter-spacing:.1em;text-transform:uppercase;color:var(--stop);display:block;margin-bottom:3px;font-weight:600}
-
-.verdict{margin:14px 15px 4px;border-radius:14px;padding:15px 16px;border:1px solid var(--rule);
-  background:var(--card);animation:pop .4s cubic-bezier(.2,1.3,.4,1) both}
-@keyframes pop{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
-.verdict.fit{background:var(--ok-soft);border-color:color-mix(in srgb,var(--ok) 42%,transparent)}
-.verdict.nofit{background:var(--stop-soft);border-color:color-mix(in srgb,var(--stop) 42%,transparent)}
-.verdict.part{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 42%,transparent)}
-.verdict .vh{display:flex;align-items:center;gap:9px;margin-bottom:6px}
-.verdict .vh b{font-size:15px;font-weight:600}
-.verdict.fit .vh b{color:var(--ok)}.verdict.nofit .vh b{color:var(--stop)}.verdict.part .vh b{color:var(--warn)}
-.verdict p{margin:0;font-size:13px;color:var(--ink-2);line-height:1.5}
-.ring{flex:none;width:34px;height:34px;transform:rotate(-90deg)}
-.ring circle{fill:none;stroke-width:3.5;stroke-linecap:round}
-.ring .tr{stroke:var(--rule)}
-.ring .fg{stroke:currentColor;transition:stroke-dashoffset .9s cubic-bezier(.2,.8,.25,1)}
-
-.mainbtn{position:sticky;bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));
-  background:linear-gradient(to top,var(--bg) 62%,transparent)}
-.btn{width:100%;border:none;border-radius:13px;padding:14px;font-family:inherit;font-size:15px;
-  font-weight:600;background:var(--accent);color:var(--accent-ink);cursor:pointer;transition:transform .13s,opacity .15s}
-.btn:active{transform:scale(.978)}
-.btn[disabled]{opacity:.42;cursor:default}
-
-.wz{padding:20px 16px 6px}
-.steps{display:flex;gap:5px;margin-bottom:22px}
-.steps i{flex:1;height:3px;border-radius:2px;background:var(--rule);transition:background .3s}
-.steps i.on{background:var(--accent)}
-.wz h2{font-family:"Bitter",Georgia,serif;font-size:23px;line-height:1.22;margin:0 0 7px;letter-spacing:-.018em}
-.wz .q{font-size:13.5px;color:var(--ink-3);margin:0 0 20px}
-.opts{display:flex;flex-direction:column;gap:8px}
-.opt{display:flex;align-items:center;gap:12px;padding:14px 15px;border-radius:13px;border:1.5px solid var(--rule);
-  background:var(--card);cursor:pointer;font-family:inherit;font-size:14.5px;color:var(--ink);text-align:left;
-  transition:all .16s;width:100%;font-weight:500}
-.opt:active{transform:scale(.985)}
-.opt.on{border-color:var(--accent);background:var(--accent-soft)}
-.opt .sw{flex:none;width:9px;height:9px;border-radius:50%;background:var(--c,var(--accent))}
-.opt .rt{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-3)}
-.rng{width:100%;accent-color:var(--accent);margin:6px 0 2px}
-.rngval{font-family:"Bitter",serif;font-size:38px;font-weight:700;color:var(--accent);text-align:center;
-  margin:10px 0 0;font-variant-numeric:tabular-nums}
-.rngval small{font-size:15px;color:var(--ink-3);font-weight:400;font-family:"Golos Text",sans-serif}
-
-.mrow{display:flex;align-items:center;gap:12px;padding:13px 14px;background:var(--card);border:1px solid var(--rule);
-  border-radius:14px;margin-bottom:9px;cursor:pointer;animation:rise .4s cubic-bezier(.22,.9,.3,1) both;
-  position:relative;overflow:hidden}
-.mrow::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c)}
-.mrow .pct{flex:none;font-family:"JetBrains Mono",monospace;font-size:15px;font-weight:600;width:44px;
-  text-align:center;font-variant-numeric:tabular-nums}
-.mrow .mi{min-width:0;flex:1}
-.mrow .mi b{display:block;font-size:14px;font-weight:600;color:var(--ink);line-height:1.3;margin-bottom:2px}
-.mrow .mi span{font-size:11.5px;color:var(--ink-3)}
-
-.fld{margin-bottom:13px}
-.fld label{display:block;font-size:12px;color:var(--ink-3);margin-bottom:5px;font-weight:500}
-.fld input,.fld textarea{width:100%;padding:12px 13px;border-radius:11px;border:1.5px solid var(--rule);
-  background:var(--card);color:var(--ink);font-family:inherit;font-size:16px;transition:border-color .16s}
-.fld textarea{resize:vertical;min-height:80px;line-height:1.5}
-.fld input:focus,.fld textarea:focus{outline:none;border-color:var(--accent)}
-.guard{display:flex;gap:9px;padding:12px 13px;border-radius:11px;background:var(--stop-soft);
-  border:1px solid color-mix(in srgb,var(--stop) 32%,transparent);margin-bottom:14px}
-.guard svg{width:16px;height:16px;flex:none;stroke:var(--stop);stroke-width:2;margin-top:2px}
-.guard p{margin:0;font-size:12.5px;color:var(--ink-2);line-height:1.45}
-.guard b{color:var(--stop)}
-
-.done{padding:52px 24px;text-align:center}
-.done .mark{width:66px;height:66px;margin:0 auto 20px;border-radius:50%;background:var(--ok-soft);
-  display:grid;place-items:center;animation:pop .5s cubic-bezier(.2,1.4,.4,1) both}
-.done .mark svg{width:30px;height:30px;stroke:var(--ok);stroke-width:2.6;fill:none}
-.done h2{font-family:"Bitter",serif;font-size:21px;margin:0 0 9px}
-.done p{font-size:13.5px;color:var(--ink-3);margin:0 auto 22px;max-width:30ch;line-height:1.55}
-.done .code{font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--accent);margin-bottom:22px}
-
-.ref{background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:13px 15px;margin-bottom:11px;
-  animation:rise .34s cubic-bezier(.22,.9,.3,1) both}
-.ref .rh{display:flex;align-items:center;gap:8px;margin-bottom:3px}
-.ref .rh b{font-size:14px;font-weight:600}
-.ref .code{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-3)}
-.ref .rsub{font-size:12px;color:var(--ink-3);margin:0 0 13px}
-.track{display:flex;align-items:center}
-.track .nd{flex:none;width:11px;height:11px;border-radius:50%;background:var(--rule)}
-.track .nd.done,.track .nd.now{background:var(--accent)}
-.track .nd.now{box-shadow:0 0 0 4px var(--accent-soft)}
-.track .ln{flex:1;height:2px;background:var(--rule)}
-.track .ln.done{background:var(--accent)}
-.tlabels{display:flex;justify-content:space-between;margin-top:7px}
-.tlabels span{font-size:9.5px;color:var(--ink-3);text-align:center;flex:1;line-height:1.25}
-.tlabels span:first-child{text-align:left}.tlabels span:last-child{text-align:right}
-.tlabels span.now{color:var(--accent);font-weight:600}
-
-.tabs{flex:none;display:grid;grid-template-columns:repeat(3,1fr);background:var(--card);
-  border-top:1px solid var(--rule);padding:6px 4px calc(8px + env(safe-area-inset-bottom))}
-.tabs button{border:none;background:transparent;cursor:pointer;padding:5px 2px;border-radius:10px;
-  display:flex;flex-direction:column;align-items:center;gap:3px;font-family:inherit;font-size:10.5px;
-  font-weight:500;color:var(--ink-3);transition:color .18s}
-.tabs button svg{width:21px;height:21px;stroke-width:1.7;fill:none}
-.tabs button.on{color:var(--accent)}
-</style>
-</head>
-<body>
-
-<div class="view" id="view"></div>
-
-<nav class="tabs" id="tabs">
-  <button data-tab="feed" class="on">
-    <svg viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg>Наборы</button>
-  <button data-tab="match">
-    <svg viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Подбор</button>
-  <button data-tab="mine">
-    <svg viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Направления</button>
-</nav>
-
-<script>
-(function(){
-"use strict";
-
-/* ================= НАСТРОЙКА ================= */
-/* Вставьте сюда адрес веб-приложения Apps Script (заканчивается на /exec) */
-var API_URL = "https://script.google.com/macros/s/AKfycbwm7Mx9ffy0cTYIVk-Gp5Dmu7Fizh4EjYBH1eKZRWMU-hL61nSAGsZdK45vQ64XRNjeaQ/exec";
-/* ============================================= */
-
-var tg = window.Telegram && window.Telegram.WebApp;
-if (tg) {
-  tg.ready(); tg.expand();
-  if (tg.colorScheme === "dark") document.documentElement.setAttribute("data-dark","1");
-  tg.onEvent("themeChanged", function(){
-    document.documentElement.setAttribute("data-dark", tg.colorScheme === "dark" ? "1" : "0");
-  });
-  try { tg.setHeaderColor("secondary_bg_color"); } catch(e){}
-} else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-  document.documentElement.setAttribute("data-dark","1");
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
-function haptic(kind){ try{ tg.HapticFeedback.impactOccurred(kind||"light"); }catch(e){} }
-function notify(kind){ try{ tg.HapticFeedback.notificationOccurred(kind); }catch(e){} }
-function uid(){ try{ return tg.initDataUnsafe.user.id; }catch(e){ return ""; } }
-function uname(){ try{ var u=tg.initDataUnsafe.user; return ((u.first_name||"")+" "+(u.last_name||"")).trim(); }catch(e){ return ""; } }
 
-var NOZNAME = {ibd:"ВЗК",derm:"Дерматология",neuro:"Неврология",onc:"Онкология",endo:"Эндокринология",psy:"Психиатрия",other:"Другое"};
-function nozColor(k){ return "var(--"+(NOZNAME[k]?k:"other")+")"; }
-function nozLabel(p){ return p.nozName || NOZNAME[p.noz] || "Исследование"; }
+function readProtocols_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var pv = ss.getSheetByName(SH_PROTO).getDataRange().getValues();
+  var cv = ss.getSheetByName(SH_CRIT).getDataRange().getValues();
 
-var S = { tab:"feed", screen:"feed", ctx:null, P:[], REF:[], loading:true,
-          fNoz:[], fCity:null, crit:{}, wz:{step:0,age:52,noz:null,load:null} };
-try{ var sv=JSON.parse(localStorage.getItem("gcd_f")||"null"); if(sv){S.fNoz=sv.n||[];S.fCity=sv.c||null;} }catch(e){}
-function saveF(){ try{ localStorage.setItem("gcd_f",JSON.stringify({n:S.fNoz,c:S.fCity})); }catch(e){} }
-
-var view = document.getElementById("view");
-var esc_d = document.createElement("div");
-function esc(s){ esc_d.textContent = s==null?"":s; return esc_d.innerHTML; }
-
-/* ---------- загрузка данных ---------- */
-function load(){
-  fetch(API_URL + "?action=protocols")
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      S.P = (d && d.protocols) || [];
-      S.loading = false;
-      var q = new URLSearchParams(location.search).get("p");
-      if(q && byCode(q)) go("card", q); else render();
-      loadRefs();
-    })
-    .catch(function(){
-      S.loading = false;
-      S.error = true;
-      render();
+  var crit = {};
+  for (var i = 1; i < cv.length; i++) {
+    var code = String(cv[i][0]).trim();
+    if (!code) continue;
+    (crit[code] = crit[code] || []).push({
+      e: String(cv[i][1]).trim().toLowerCase().indexOf('искл') === 0,
+      t: String(cv[i][2]).trim(),
+      h: String(cv[i][3]).trim()
     });
-}
-function loadRefs(){
-  if(!uid()) return;
-  fetch(API_URL + "?action=referrals&uid=" + encodeURIComponent(uid()))
-    .then(function(r){ return r.json(); })
-    .then(function(d){ S.REF = (d && d.referrals) || []; if(S.screen==="mine") render(); })
-    .catch(function(){});
-}
-function byCode(c){ for(var i=0;i<S.P.length;i++) if(S.P[i].code===c) return S.P[i]; return null; }
-function status(p){
-  var left = p.slots - p.took;
-  if(left<=0) return {k:"shut",t:"набор закрыт"};
-  if(left<=2) return {k:"last",t:"последние места"};
-  return {k:"open",t:"открыт набор"};
-}
-
-/* ---------- кнопки Telegram ---------- */
-function setNav(){
-  if(!tg) return;
-  var deep = S.screen==="card"||S.screen==="refer"||S.screen==="sent"||S.screen==="mresult";
-  try{
-    if(deep) tg.BackButton.show(); else tg.BackButton.hide();
-  }catch(e){}
-}
-if(tg){ try{ tg.BackButton.onClick(back); }catch(e){} }
-function back(){
-  haptic();
-  if(S.screen==="card") return go("feed");
-  if(S.screen==="refer") return go("card", S.ctx);
-  if(S.screen==="sent") return go("mine");
-  if(S.screen==="mresult"){ S.wz.step=2; return go("match"); }
-  go(S.tab);
-}
-function go(screen, ctx){
-  S.screen=screen; S.ctx=ctx||null;
-  if(screen==="feed"||screen==="match"||screen==="mine") S.tab=screen;
-  render(); view.scrollTop=0;
-}
-document.getElementById("tabs").addEventListener("click", function(e){
-  var b=e.target.closest("button[data-tab]"); if(!b) return;
-  haptic();
-  var t=b.getAttribute("data-tab");
-  if(t==="match"){ S.wz.step=0;S.wz.noz=null;S.wz.load=null; }
-  go(t);
-});
-
-/* ---------- рендер ---------- */
-function render(){
-  setNav();
-  var s=S.screen;
-  if(s==="feed") { view.innerHTML=feed(); wireFeed(); }
-  else if(s==="match"){ view.innerHTML=wizard(); wireWizard(); }
-  else if(s==="mresult"){ view.innerHTML=mresult(); wireM(); }
-  else if(s==="mine"){ view.innerHTML=mine(); }
-  else if(s==="card"){ var p=byCode(S.ctx); if(!p) return go("feed"); view.innerHTML=card(p); wireCard(p); }
-  else if(s==="refer"){ view.innerHTML=refer(byCode(S.ctx)); wireRefer(); }
-  else if(s==="sent"){ view.innerHTML=sent(); wireSent(); }
-  document.querySelectorAll("#tabs button").forEach(function(b){
-    b.classList.toggle("on", b.getAttribute("data-tab")===S.tab);
-  });
-  requestAnimationFrame(function(){
-    document.querySelectorAll(".bar i[data-w]").forEach(function(el){ el.style.width=el.getAttribute("data-w")+"%"; });
-  });
-}
-
-function feed(){
-  if(S.loading){
-    var h='<div class="pad">';
-    for(var i=0;i<3;i++) h+='<div class="sk"><div style="width:32%"></div><div style="width:84%;height:14px"></div><div style="width:56%"></div></div>';
-    return h+'</div>';
-  }
-  if(S.error){
-    return '<div class="empty"><p>Не удалось загрузить наборы</p><p style="font-size:12.5px">Проверьте соединение и откройте приложение снова</p></div>';
   }
 
-  var nozs=[], cities=[];
-  S.P.forEach(function(p){
-    if(nozs.indexOf(p.noz)<0) nozs.push(p.noz);
-    if(cities.indexOf(p.city)<0) cities.push(p.city);
-  });
-
-  var h='<div class="chips" id="cnoz">';
-  nozs.forEach(function(k){
-    var lbl = NOZNAME[k] || (S.P.filter(function(p){return p.noz===k;})[0]||{}).nozName || k;
-    h+='<button class="chip dot'+(S.fNoz.indexOf(k)>-1?" on":"")+'" data-n="'+esc(k)+'" style="--c:'+nozColor(k)+'">'+esc(lbl)+'</button>';
-  });
-  h+='</div><div class="chips" id="ccity"><button class="chip'+(!S.fCity?" on":"")+'" data-c="">Все города</button>';
-  cities.forEach(function(c){ h+='<button class="chip'+(S.fCity===c?" on":"")+'" data-c="'+esc(c)+'">'+esc(c)+'</button>'; });
-  h+='</div><div class="pad" id="list">';
-
-  var list=S.P.filter(function(p){
-    if(S.fNoz.length && S.fNoz.indexOf(p.noz)<0) return false;
-    if(S.fCity && p.city!==S.fCity) return false;
-    return true;
-  }).sort(function(a,b){ return (a.slots-a.took<=0?1:0)-(b.slots-b.took<=0?1:0); });
-
-  if(!list.length) h+='<div class="empty"><p>По этим фильтрам наборов нет</p><p style="font-size:12.5px">Снимите один из фильтров</p></div>';
-  list.forEach(function(p,i){
-    var st=status(p), pct=p.slots?Math.round(p.took/p.slots*100):0;
-    h+='<div class="card" data-p="'+esc(p.code)+'" style="--c:'+nozColor(p.noz)+';animation-delay:'+(i*38)+'ms">'
-     + '<div class="toprow"><span class="noz">'+esc(nozLabel(p))+'</span>'
-     + '<span class="pill '+(st.k==="last"?"last":st.k==="shut"?"shut":"")+'">'+st.t+'</span></div>'
-     + '<h3>'+esc(p.title)+'</h3>'
-     + '<p class="where"><b>'+esc(p.site)+'</b> · '+esc(p.city)+(p.phase?' · '+esc(p.phase):'')+'</p>'
-     + '<div class="bar"><i data-w="'+pct+'"></i></div>'
-     + '<div class="slots"><span>Включено <b>'+p.took+'</b> из <b>'+p.slots+'</b></span>'
-     + '<span>'+(st.k==="shut"?"мест нет":"свободно "+(p.slots-p.took))+'</span></div></div>';
-  });
-  return h+'</div>';
-}
-function wireFeed(){
-  var cn=document.getElementById("cnoz"); if(!cn) return;
-  cn.addEventListener("click",function(e){
-    var b=e.target.closest(".chip"); if(!b) return; haptic();
-    var n=b.getAttribute("data-n"), i=S.fNoz.indexOf(n);
-    if(i>-1) S.fNoz.splice(i,1); else S.fNoz.push(n);
-    saveF(); render();
-  });
-  document.getElementById("ccity").addEventListener("click",function(e){
-    var b=e.target.closest(".chip"); if(!b) return; haptic();
-    S.fCity=b.getAttribute("data-c")||null; saveF(); render();
-  });
-  document.getElementById("list").addEventListener("click",function(e){
-    var c=e.target.closest(".card"); if(!c) return; haptic();
-    go("card", c.getAttribute("data-p"));
-  });
-}
-
-function card(p){
-  var st=status(p), pct=p.slots?Math.round(p.took/p.slots*100):0, c=nozColor(p.noz);
-  var m=S.crit[p.code]||{};
-  var h='<div class="hero" style="--c:'+c+'">'
-   + '<span class="noz" style="--c:'+c+'">'+esc(nozLabel(p))+(p.phase?' · '+esc(p.phase):'')+'</span>'
-   + '<h2>'+esc(p.title)+'</h2>'
-   + (p.portrait?'<p class="portrait">'+esc(p.portrait)+'</p>':'')
-   + '<dl class="facts">'
-   + '<dt>Центр</dt><dd>'+esc(p.site)+', '+esc(p.city)+'</dd>'
-   + (p.pi?'<dt>Исследователь</dt><dd>'+esc(p.pi)+'</dd>':'')
-   + (p.design?'<dt>Дизайн</dt><dd>'+esc(p.design)+'</dd>':'')
-   + (p.drug?'<dt>Препарат</dt><dd>'+esc(p.drug)+'</dd>':'')
-   + '<dt>Код</dt><dd class="mono">'+esc(p.code)+'</dd>'
-   + (p.until?'<dt>Набор до</dt><dd class="mono">'+esc(p.until)+'</dd>':'')
-   + '</dl>'
-   + '<div class="blind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Название препарата, спонсор и номер протокола не раскрываются</div></div>';
-
-  h+='<div class="sect"><h4>Набор</h4><div class="bar" style="--c:'+c+'"><i data-w="'+pct+'"></i></div>'
-   + '<div class="slots"><span>Включено <b>'+p.took+'</b> из <b>'+p.slots+'</b></span><span>'+st.t+'</span></div></div>';
-
-  if(p.crit && p.crit.length){
-    h+='<div class="sect"><h4>Критерии</h4><p class="lead">Отметьте то, что верно для вашего пациента. Данные никуда не передаются — расчёт идёт на вашем устройстве.</p><ul class="crit" id="crit">';
-    p.crit.forEach(function(cr,i){
-      var v=m[i], cls=v==="y"?"yes":v==="n"?"no":"";
-      h+='<li class="'+cls+(cr.e?" excl":"")+'" data-i="'+i+'"><span class="box">'
-       + '<svg class="tick" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
-       + '<svg class="cross" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>'
-       + '</span><span class="txt">'+esc(cr.t)+(cr.h?'<em>'+esc(cr.h)+'</em>':'')+'</span></li>';
+  var out = [];
+  for (var r = 1; r < pv.length; r++) {
+    var v = pv[r];
+    if (!String(v[0]).trim()) continue;
+    if (String(v[1]).trim().toLowerCase() !== 'да') continue;
+    out.push({
+      code: String(v[0]).trim(),
+      noz: String(v[2]).trim() || 'other',
+      nozName: String(v[3]).trim(),
+      city: String(v[4]).trim(),
+      site: String(v[5]).trim(),
+      pi: String(v[6]).trim(),
+      title: String(v[7]).trim(),
+      portrait: String(v[8]).trim(),
+      phase: String(v[9]).trim(),
+      design: String(v[10]).trim(),
+      drug: String(v[11]).trim(),
+      age: [Number(v[12]) || 0, Number(v[13]) || 99],
+      slots: Number(v[14]) || 0,
+      took: Number(v[15]) || 0,
+      until: fmtDate_(v[16]),
+      benefit: String(v[17]).trim(),
+      washout: String(v[18]).trim(),
+      coord: String(v[19]).trim(),
+      phone: String(v[20]).trim(),
+      crit: crit[String(v[0]).trim()] || []
     });
-    h+='</ul></div><div id="vbox"></div>';
   }
-  if(p.washout) h+='<div class="sect"><h4>Окна отмывки до рандомизации</h4><p class="body">'+esc(p.washout)+'</p></div>';
-  if(p.benefit) h+='<div class="sect"><h4>Что получает пациент</h4><p class="body">'+esc(p.benefit)+'</p></div>';
-  h+='<div class="sect"><p class="lead" style="margin-top:6px">Решение о включении принимает врач-исследователь по результатам скрининга. Прохождение скрининга не гарантировано.</p></div>';
-  h+='<div class="mainbtn"><button class="btn" id="referbtn"'+(st.k==="shut"?" disabled":"")+'>'
-   + (st.k==="shut"?"Набор закрыт":"Направить пациента")+'</button></div>';
-  return h;
-}
-function wireCard(p){
-  var list=document.getElementById("crit");
-  if(list) list.addEventListener("click",function(e){
-    var li=e.target.closest("li"); if(!li) return; haptic();
-    var i=li.getAttribute("data-i");
-    var m=S.crit[p.code]=S.crit[p.code]||{};
-    m[i]= m[i]==="y"?"n": m[i]==="n"?undefined:"y";
-    if(m[i]===undefined) delete m[i];
-    li.className=(m[i]==="y"?"yes":m[i]==="n"?"no":"")+(p.crit[i].e?" excl":"");
-    verdict(p);
-  });
-  document.getElementById("referbtn").addEventListener("click",function(){
-    if(status(p).k==="shut") return; haptic("medium"); go("refer", p.code);
-  });
-  verdict(p);
-}
-function verdict(p){
-  var box=document.getElementById("vbox"); if(!box) return;
-  var m=S.crit[p.code]||{}, answered=0, fails=0, oks=0;
-  p.crit.forEach(function(cr,i){
-    var v=m[i]; if(!v) return; answered++;
-    if(cr.e ? v==="n" : v==="y") oks++; else fails++;
-  });
-  if(!answered){ box.innerHTML=""; return; }
-  var total=p.crit.length, pct=Math.round(oks/total*100), kind, head, text, col;
-  if(fails>0){ kind="nofit"; col="var(--stop)"; head="Пациент не подходит";
-    text = fails===1 ? "Один критерий не выполняется — этого достаточно для исключения."
-                     : "Не выполняются "+fails+" критерия."; }
-  else if(answered<total){ kind="part"; col="var(--warn)"; head="Нужно уточнить";
-    text="Подтверждено "+oks+" из "+total+". Отметьте остальные критерии или направьте случай координатору."; }
-  else { kind="fit"; col="var(--ok)"; head="Пациент предварительно подходит";
-    text="Все критерии выполняются. Окончательное решение принимает исследователь по результатам скрининга."; }
-  var R=14, C=2*Math.PI*R;
-  box.innerHTML='<div class="verdict '+kind+'" style="color:'+col+'"><div class="vh">'
-   + '<svg class="ring" viewBox="0 0 34 34"><circle class="tr" cx="17" cy="17" r="'+R+'"/>'
-   + '<circle class="fg" cx="17" cy="17" r="'+R+'" stroke-dasharray="'+C.toFixed(1)+'" stroke-dashoffset="'+C.toFixed(1)+'"/></svg>'
-   + '<b>'+head+'</b></div><p>'+text+'</p></div>';
-  requestAnimationFrame(function(){
-    var fg=box.querySelector(".fg"); if(fg) fg.style.strokeDashoffset=(C*(1-pct/100)).toFixed(1);
-  });
+  return out;
 }
 
-function wizard(){
-  var w=S.wz, h='<div class="wz"><div class="steps">';
-  for(var i=0;i<3;i++) h+='<i class="'+(i<=w.step?"on":"")+'"></i>';
-  h+='</div>';
-  if(w.step===0){
-    h+='<h2>Сколько лет пациенту?</h2><p class="q">Возраст отсекает большую часть протоколов сразу.</p>'
-     + '<p class="rngval" id="av">'+w.age+' <small>лет</small></p>'
-     + '<input class="rng" type="range" id="age" min="18" max="85" value="'+w.age+'">';
-  } else if(w.step===1){
-    var nozs=[]; S.P.forEach(function(p){ if(nozs.indexOf(p.noz)<0) nozs.push(p.noz); });
-    h+='<h2>По какому профилю?</h2><p class="q">Только направления, где сейчас идёт набор.</p><div class="opts">';
-    nozs.forEach(function(k){
-      var n=S.P.filter(function(p){return p.noz===k&&p.slots>p.took&&w.age>=p.age[0]&&w.age<=p.age[1];}).length;
-      var lbl=NOZNAME[k]||(S.P.filter(function(p){return p.noz===k;})[0]||{}).nozName||k;
-      h+='<button class="opt'+(w.noz===k?" on":"")+'" data-n="'+esc(k)+'" style="--c:'+nozColor(k)+'">'
-       + '<span class="sw"></span>'+esc(lbl)+'<span class="rt">'+(n?n+" набор":"нет")+'</span></button>';
-    });
-    h+='</div>';
-  } else {
-    h+='<h2>Насколько тяжёлый случай?</h2><p class="q">Влияет только на порядок в списке, не на допуск.</p><div class="opts">';
-    [["light","Лёгкое течение, контроль есть"],["mid","Среднетяжёлое, контроль недостаточный"],["hard","Тяжёлое, терапия исчерпана"]]
-      .forEach(function(o){ h+='<button class="opt'+(w.load===o[0]?" on":"")+'" data-l="'+o[0]+'"><span class="sw"></span>'+o[1]+'</button>'; });
-    h+='</div>';
+function fmtDate_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'Europe/Moscow', 'dd.MM.yyyy');
+  return String(v).trim();
+}
+
+function readReferrals_(uid) {
+  if (!uid) return [];
+  var s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_REF);
+  var v = s.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < v.length; i++) {
+    if (String(v[i][3]) !== String(uid)) continue;
+    out.push({ id: v[i][1], code: v[i][2], step: Number(v[i][9]) || 1, note: String(v[i][10] || '') });
   }
-  h+='</div><div class="mainbtn"><button class="btn" id="next"'
-   + ((w.step===1&&!w.noz)||(w.step===2&&!w.load)?" disabled":"")+'>'
-   + (w.step===2?"Показать подходящие":"Дальше")+'</button></div>';
-  return h;
-}
-function wireWizard(){
-  var w=S.wz, a=document.getElementById("age");
-  if(a) a.addEventListener("input",function(){ w.age=+a.value; document.getElementById("av").innerHTML=w.age+' <small>лет</small>'; });
-  view.querySelectorAll(".opt").forEach(function(b){
-    b.addEventListener("click",function(){
-      haptic();
-      if(b.hasAttribute("data-n")) w.noz=b.getAttribute("data-n"); else w.load=b.getAttribute("data-l");
-      render();
-    });
-  });
-  document.getElementById("next").addEventListener("click",function(){
-    haptic("medium");
-    if(w.step<2){ w.step++; render(); } else go("mresult");
-  });
-}
-function mresult(){
-  var w=S.wz;
-  var list=S.P.map(function(p){
-    var s=0;
-    if(w.age>=p.age[0]&&w.age<=p.age[1]) s+=55;
-    if(p.noz===w.noz) s+=30;
-    if(p.slots>p.took) s+=10;
-    if(w.load==="hard"&&/тяж/i.test(p.title)) s+=5;
-    if(w.load==="mid"&&/среднетяж/i.test(p.title)) s+=5;
-    return {p:p,s:Math.min(s,100)};
-  }).filter(function(x){return x.s>=60;}).sort(function(a,b){return b.s-a.s;});
-
-  var h='<div class="pad"><p style="font-size:13px;color:var(--ink-3);margin:2px 0 14px">Пациент '+w.age+' лет. Процент — формальное соответствие возрасту, профилю и наличию мест, а не прогноз включения.</p>';
-  if(!list.length) h+='<div class="empty"><p>Подходящих наборов сейчас нет</p><p style="font-size:12.5px">Загляните позже — протоколы открываются каждую неделю</p></div>';
-  list.forEach(function(x,i){
-    var p=x.p,c=nozColor(p.noz);
-    h+='<div class="mrow" data-p="'+esc(p.code)+'" style="--c:'+c+';animation-delay:'+(i*55)+'ms">'
-     + '<span class="pct" style="color:'+c+'">'+x.s+'%</span>'
-     + '<span class="mi"><b>'+esc(p.title)+'</b><span>'+esc(p.site)+' · '+esc(p.city)+' · свободно '+Math.max(0,p.slots-p.took)+'</span></span></div>';
-  });
-  return h+'</div>';
-}
-function wireM(){
-  view.addEventListener("click",function(e){
-    var r=e.target.closest(".mrow"); if(!r) return; haptic();
-    go("card", r.getAttribute("data-p"));
-  });
+  return out;
 }
 
-function refer(p){
-  return '<div class="pad">'
-   + '<p style="font-size:13px;color:var(--ink-3);margin:2px 0 14px">Направление в <b style="color:var(--ink-2)">'+esc(p.site)+'</b> · '+esc(p.code)+'</p>'
-   + '<div class="guard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>'
-   + '<p><b>Без персональных данных пациента.</b> Не указывайте ФИО, дату рождения, телефон, номер полиса и не прикрепляйте документы. Координатор свяжется с вами и продолжит по защищённому каналу центра.</p></div>'
-   + '<div class="fld"><label>Ваше имя и отчество</label><input id="f1" value="'+esc(uname())+'" placeholder="Ирина Петровна"></div>'
-   + '<div class="fld"><label>Специальность</label><input id="f2" placeholder="Гастроэнтеролог"></div>'
-   + '<div class="fld"><label>Медицинская организация</label><input id="f3" placeholder="ГП №25, Санкт-Петербург"></div>'
-   + '<div class="fld"><label>Телефон для связи с вами</label><input id="f4" inputmode="tel" placeholder="+7 ___ ___ __ __"></div>'
-   + '<div class="fld"><label>Обезличенное описание случая</label><textarea id="f5" placeholder="Мужчина 46 лет, диагноз 4 года, два курса ГКС без стойкого эффекта, биологическую терапию не получал"></textarea></div>'
-   + '<p style="font-size:11.5px;color:var(--ink-3);margin:0;line-height:1.45">Отправляя форму, вы соглашаетесь на обработку ваших персональных данных для связи по этому направлению.</p>'
-   + '</div><div class="mainbtn"><button class="btn" id="send">Отправить координатору</button></div>';
-}
-function wireRefer(){
-  var btn=document.getElementById("send");
-  btn.addEventListener("click",function(){
-    var v=function(id){ return document.getElementById(id).value.trim(); };
-    if(!v("f1")||!v("f4")||!v("f5")){ notify("error"); alert("Заполните имя, телефон и описание случая."); return; }
-    btn.disabled=true; btn.textContent="Отправляем…";
-    fetch(API_URL,{method:"POST",body:JSON.stringify({
-      action:"refer", code:S.ctx, uid:uid(),
-      name:v("f1"), spec:v("f2"), org:v("f3"), contact:v("f4"), caseText:v("f5")
-    })}).then(function(r){return r.json();})
-      .then(function(d){ notify("success"); S.lastId=(d&&d.id)||""; loadRefs(); go("sent"); })
-      .catch(function(){ notify("error"); btn.disabled=false; btn.textContent="Отправить координатору";
-        alert("Не удалось отправить. Проверьте соединение."); });
-  });
-}
-function sent(){
-  return '<div class="done"><div class="mark"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></div>'
-   + '<h2>Направление принято</h2>'
-   + (S.lastId?'<div class="code">'+esc(S.lastId)+'</div>':'')
-   + '<p>Координатор свяжется с вами в течение рабочего дня. Статус случая появится в разделе «Направления».</p>'
-   + '<div style="max-width:260px;margin:0 auto"><button class="btn" id="tomine">К моим направлениям</button></div></div>';
-}
-function wireSent(){ document.getElementById("tomine").addEventListener("click",function(){ haptic(); go("mine"); }); }
+/* ============ 3. ПРИЁМ ДАННЫХ ============ */
 
-var STEPS=["Принято","Предскрининг","Скрининг","Рандомизация"];
-function mine(){
-  var h='<div class="pad">';
-  if(!S.REF.length){
-    return h+'<div class="empty"><p>Направлений пока нет</p><p style="font-size:12.5px">Откройте карточку набора и направьте пациента — статус появится здесь</p></div></div>';
+function doPost(e) {
+  var body = {};
+  try { body = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false }); }
+
+  // Вебхук Telegram приходит с ?tg=SECRET
+  if (e.parameter && e.parameter.tg && e.parameter.tg === SECRET_()) {
+    try {
+      if (!seen_(body.update_id)) handleUpdate_(body);
+    } catch (err) { notifyAdmin_('Ошибка бота: ' + err); }
+    return json_({ ok: true });
   }
-  h+='<p style="font-size:13px;color:var(--ink-3);margin:2px 0 14px">Статус по каждому направленному случаю. Обезличенно, по внутреннему коду.</p>';
-  S.REF.forEach(function(r,i){
-    var p=byCode(r.code)||{noz:"other",title:r.code,site:""}, c=nozColor(p.noz);
-    h+='<div class="ref" style="animation-delay:'+(i*45)+'ms">'
-     + '<div class="rh"><span class="noz" style="--c:'+c+'">'+esc(nozLabel(p))+'</span><span class="code">'+esc(r.id)+'</span></div>'
-     + '<div class="rh"><b>'+esc(p.title)+'</b></div>'
-     + '<p class="rsub">'+esc(STEPS[Math.min(3,r.step-1)])+(r.note?' · '+esc(r.note):'')+'</p><div class="track">';
-    for(var k=0;k<4;k++){
-      h+='<span class="nd '+(k<r.step-1?"done":k===r.step-1?"now":"")+'"></span>';
-      if(k<3) h+='<span class="ln '+(k<r.step-1?"done":"")+'"></span>';
+
+  if (body.action === 'refer') return json_(saveReferral_(body));
+  return json_({ ok: false, error: 'unknown action' });
+}
+
+function saveReferral_(b) {
+  var s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_REF);
+  var id = 'R-' + Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyMM') + '-' +
+           Utilities.formatString('%02d', s.getLastRow());
+  var text = String(b.caseText || '').slice(0, 1500);
+
+  s.appendRow([
+    new Date(), id, b.code || '', b.uid || '', b.name || '', b.spec || '',
+    b.org || '', b.contact || '', text, 1, ''
+  ]);
+
+  notifyAdmin_(
+    '🆕 Новое направление ' + id +
+    '\nПротокол: ' + (b.code || '—') +
+    '\nВрач: ' + (b.name || '—') + ', ' + (b.spec || '—') +
+    '\nЛПУ: ' + (b.org || '—') +
+    '\nКонтакт: ' + (b.contact || '—') +
+    '\n\n' + text
+  );
+  return { ok: true, id: id };
+}
+
+/* ============ 4. БОТ ============ */
+
+function tg_(method, payload) {
+  var res = UrlFetchApp.fetch('https://api.telegram.org/bot' + TOKEN_() + '/' + method, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  return JSON.parse(res.getContentText());
+}
+
+function send_(chatId, text, extra) {
+  var p = { chat_id: chatId, text: text, parse_mode: 'HTML', disable_web_page_preview: true };
+  if (extra) for (var k in extra) p[k] = extra[k];
+  return tg_('sendMessage', p);
+}
+
+function notifyAdmin_(text) {
+  if (ADMIN_()) send_(ADMIN_(), text);
+}
+
+/** Защита от повторной обработки одного и того же обновления */
+function seen_(id) {
+  if (!id) return false;
+  var p = PropertiesService.getScriptProperties();
+  var key = 'u_' + id;
+  if (p.getProperty(key)) return true;
+  p.setProperty(key, '1');
+  var keys = Object.keys(p.getProperties()).filter(function (k) { return k.indexOf('u_') === 0; });
+  if (keys.length > 200) {
+    keys.sort().slice(0, 100).forEach(function (k) { p.deleteProperty(k); });
+  }
+  return false;
+}
+
+function handleUpdate_(u) {
+  if (u.chat_join_request) return onJoinRequest_(u.chat_join_request);
+  if (u.message) return onMessage_(u.message);
+  if (u.callback_query) return onCallback_(u.callback_query);
+}
+
+/** Заявка на вступление в канал — начинаем верификацию в личке */
+function onJoinRequest_(r) {
+  var uid = r.from.id;
+  setState_(uid, 'ask_name', JSON.stringify({ username: r.from.username || '' }));
+  send_(uid,
+    '<b>Канал открытых наборов GCD</b>\n\n' +
+    'Канал предназначен только для медицинских работников, поэтому пара вопросов перед вступлением.\n\n' +
+    'Как вас зовут? Напишите фамилию, имя и отчество.'
+  );
+}
+
+function onMessage_(m) {
+  var uid = m.chat.id;
+  var text = String(m.text || '').trim();
+
+  if (text.indexOf('/start') === 0) {
+    var arg = text.split(' ')[1] || '';
+    if (arg.indexOf('p_') === 0) return sendProtocolCard_(uid, arg.slice(2));
+    return send_(uid,
+      '<b>Наборы GCD</b>\n\nЗдесь можно посмотреть открытые наборы в клинические исследования и направить пациента.',
+      appButton_('Открыть каталог наборов')
+    );
+  }
+
+  var st = getState_(uid);
+  if (!st) return;
+
+  var draft = {};
+  try { draft = JSON.parse(st.draft || '{}'); } catch (err) {}
+
+  if (st.step === 'ask_name') {
+    draft.name = text;
+    setState_(uid, 'ask_spec', JSON.stringify(draft));
+    return send_(uid, 'Ваша специальность?');
+  }
+  if (st.step === 'ask_spec') {
+    draft.spec = text;
+    setState_(uid, 'ask_org', JSON.stringify(draft));
+    return send_(uid, 'В какой медицинской организации вы работаете? Укажите название и город.');
+  }
+  if (st.step === 'ask_org') {
+    draft.org = text;
+    clearState_(uid);
+    approveDoctor_(uid, draft);
+  }
+}
+
+function approveDoctor_(uid, d) {
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_DOC)
+    .appendRow([new Date(), uid, d.username || '', d.name || '', d.spec || '', d.org || '', 'одобрен']);
+
+  tg_('approveChatJoinRequest', { chat_id: CHANNEL_(), user_id: uid });
+
+  send_(uid,
+    '✅ <b>Доступ открыт</b>\n\n' +
+    'Вы добавлены в канал. В нём публикуются открытые наборы по центрам под управлением GCD.\n\n' +
+    'Каталог всех наборов с подбором под пациента — по кнопке ниже.\n\n' +
+    '<i>Вознаграждение за направление пациентов не предусмотрено и не выплачивается — ст. 74 ФЗ-323.</i>',
+    appButton_('Открыть каталог наборов')
+  );
+
+  notifyAdmin_('👤 Новый подписчик\n' + (d.name || '') + '\n' + (d.spec || '') + '\n' + (d.org || ''));
+}
+
+function appButton_(label, query) {
+  return {
+    reply_markup: {
+      inline_keyboard: [[{ text: label, web_app: { url: WEBAPP_() + (query || '') } }]]
     }
-    h+='</div><div class="tlabels">';
-    STEPS.forEach(function(s,k){ h+='<span class="'+(k===r.step-1?"now":"")+'">'+s+'</span>'; });
-    h+='</div></div>';
-  });
-  h+='<p style="font-size:12px;color:var(--ink-3);margin:16px 2px 0;line-height:1.5">Вознаграждение за направление пациентов не предусмотрено и не выплачивается — ст. 74 ФЗ-323.</p>';
-  return h+'</div>';
+  };
 }
 
-render();
-load();
-})();
-</script>
-</body>
-</html>
+function sendProtocolCard_(uid, code) {
+  var list = readProtocols_();
+  var p = null;
+  for (var i = 0; i < list.length; i++) if (list[i].code === code) p = list[i];
+  if (!p) return send_(uid, 'Этот набор больше не активен.', appButton_('Посмотреть открытые наборы'));
+
+  var left = Math.max(0, p.slots - p.took);
+  send_(uid,
+    '<b>' + esc_(p.title) + '</b>\n' +
+    esc_(p.site) + ', ' + esc_(p.city) + '\n' +
+    p.phase + ' · ' + esc_(p.design) + '\n\n' +
+    esc_(p.portrait) + '\n\n' +
+    'Свободно мест: <b>' + left + '</b> · набор до ' + p.until,
+    appButton_('Критерии и направление', '?p=' + encodeURIComponent(code))
+  );
+}
+
+function onCallback_(q) {
+  tg_('answerCallbackQuery', { callback_query_id: q.id });
+}
+
+function esc_(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* ---- состояния диалога ---- */
+function stateSheet_() { return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_STATE); }
+
+function getState_(uid) {
+  var v = stateSheet_().getDataRange().getValues();
+  for (var i = 1; i < v.length; i++) {
+    if (String(v[i][0]) === String(uid)) return { row: i + 1, step: String(v[i][1]), draft: String(v[i][2]) };
+  }
+  return null;
+}
+function setState_(uid, step, draft) {
+  var s = stateSheet_(), cur = getState_(uid);
+  if (cur) { s.getRange(cur.row, 2, 1, 2).setValues([[step, draft]]); }
+  else { s.appendRow([uid, step, draft]); }
+}
+function clearState_(uid) {
+  var cur = getState_(uid);
+  if (cur) stateSheet_().deleteRow(cur.row);
+}
+
+/* ============ 5. ВЕБХУК ============ */
+
+function setWebhook() {
+  var url = ScriptApp.getService().getUrl() + '?tg=' + SECRET_();
+  var r = tg_('setWebhook', {
+    url: url,
+    allowed_updates: ['message', 'callback_query', 'chat_join_request']
+  });
+  SpreadsheetApp.getUi().alert(JSON.stringify(r));
+}
+
+function removeWebhook() {
+  SpreadsheetApp.getUi().alert(JSON.stringify(tg_('deleteWebhook', {})));
+}
+
+/* ============ 6. МЕНЮ В ТАБЛИЦЕ ============ */
+
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('GCD')
+    .addItem('Первичная установка', 'setup')
+    .addSeparator()
+    .addItem('Подключить бота (вебхук)', 'setWebhook')
+    .addItem('Отключить бота', 'removeWebhook')
+    .addToUi();
+}
