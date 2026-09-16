@@ -72,6 +72,9 @@ body{
 .slots{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-3);
   font-family:"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
 .slots b{color:var(--ink-2);font-weight:600}
+.fnote{font-size:12.5px;color:var(--ink-3);margin:0 0 12px;padding:0 2px}
+.fnote button{border:none;background:none;color:var(--accent);font-family:inherit;font-size:12.5px;
+  cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px}
 .empty{text-align:center;padding:46px 20px;color:var(--ink-3)}
 .empty p{margin:0 0 4px;font-size:14px}
 .sk{background:var(--card);border:1px solid var(--rule);border-radius:15px;padding:14px 15px;margin-bottom:11px}
@@ -380,8 +383,8 @@ function feed(){
 
   var nozs=[], cities=[];
   S.P.forEach(function(p){
-    if(nozs.indexOf(p.noz)<0) nozs.push(p.noz);
-    if(cities.indexOf(p.city)<0) cities.push(p.city);
+    if(p.noz && nozs.indexOf(p.noz)<0) nozs.push(p.noz);
+    if(p.city && cities.indexOf(p.city)<0) cities.push(p.city);
   });
 
   var h='<div class="chips" id="cnoz">';
@@ -399,7 +402,12 @@ function feed(){
     return true;
   }).sort(function(a,b){ return (a.slots-a.took<=0?1:0)-(b.slots-b.took<=0?1:0); });
 
-  if(!list.length) h+='<div class="empty"><p>По этим фильтрам наборов нет</p><p style="font-size:12.5px">Снимите один из фильтров</p></div>';
+  if(S.fNoz.length || S.fCity){
+    h+='<p class="fnote">Показано '+list.length+' из '+S.P.length
+     + ' · <button id="clearf">сбросить фильтры</button></p>';
+  }
+
+  if(!list.length) h+='<div class="empty"><p>По этим фильтрам наборов нет</p><p style="font-size:12.5px">Снимите один из фильтров выше</p></div>';
   list.forEach(function(p,i){
     var st=status(p), w=whereLine(p);
     h+='<div class="card" data-p="'+esc(p.code)+'" style="--c:'+nozColor(p.noz)+';animation-delay:'+(i*38)+'ms">'
@@ -433,6 +441,10 @@ function wireFeed(){
   document.getElementById("list").addEventListener("click",function(e){
     var c=e.target.closest(".card"); if(!c) return; haptic();
     go("card", c.getAttribute("data-p"));
+  });
+  var cf=document.getElementById("clearf");
+  if(cf) cf.addEventListener("click",function(){
+    haptic(); S.fNoz=[]; S.fCity=null; saveF(); render();
   });
 }
 
