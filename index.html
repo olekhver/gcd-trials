@@ -16,13 +16,15 @@
   --bg:#f2f5f6;--card:#fff;--card-2:#eaeff1;--ink:#131a20;--ink-2:#4a5763;--ink-3:#7c8995;
   --rule:#dde4e8;--accent:#0f6169;--accent-ink:#fff;--accent-soft:#deecee;
   --ok:#256b46;--ok-soft:#e0efe7;--stop:#943124;--stop-soft:#f7e6e2;--warn:#8a5a10;--warn-soft:#f8eeda;
-  --onc:#6f4a8e;--derm:#a85d2e;--neuro:#2f5f96;--endo:#1b7358;--ibd:#9d4150;--psy:#4c5885;--other:#0f6169;
+  --onc:#6f4a8e;--derm:#a85d2e;--neuro:#2f5f96;--endo:#1b7358;--ibd:#9d4150;--psy:#4c5885;
+  --resp:#6b7a2e;--other:#0f6169;
 }
 html[data-dark="1"]{
   --bg:#0f151b;--card:#182028;--card-2:#212b34;--ink:#e6ecf0;--ink-2:#aeb9c3;--ink-3:#7f8d99;
   --rule:#2a343d;--accent:#54b4bd;--accent-ink:#06282c;--accent-soft:#12323a;
   --ok:#6dc093;--ok-soft:#152d22;--stop:#e08472;--stop-soft:#33201c;--warn:#d7a648;--warn-soft:#302512;
-  --onc:#b18ccb;--derm:#d99a6b;--neuro:#79a6d8;--endo:#5fbf9b;--ibd:#d98a95;--psy:#94a0cd;--other:#54b4bd;
+  --onc:#b18ccb;--derm:#d99a6b;--neuro:#79a6d8;--endo:#5fbf9b;--ibd:#d98a95;--psy:#94a0cd;
+  --resp:#b9c46e;--other:#54b4bd;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -256,7 +258,8 @@ function notify(kind){ try{ tg.HapticFeedback.notificationOccurred(kind); }catch
 function uid(){ try{ return tg.initDataUnsafe.user.id; }catch(e){ return ""; } }
 function uname(){ try{ var u=tg.initDataUnsafe.user; return ((u.first_name||"")+" "+(u.last_name||"")).trim(); }catch(e){ return ""; } }
 
-var NOZNAME = {ibd:"ВЗК",derm:"Дерматология",neuro:"Неврология",onc:"Онкология",endo:"Эндокринология",psy:"Психиатрия",other:"Другое"};
+var NOZNAME = {ibd:"ВЗК",derm:"Дерматология",neuro:"Неврология",onc:"Онкология",
+               endo:"Эндокринология",psy:"Психиатрия",resp:"Пульмонология",other:"Другое"};
 function nozColor(k){ return "var(--"+(NOZNAME[k]?k:"other")+")"; }
 function nozLabel(p){ return p.nozName || NOZNAME[p.noz] || "Исследование"; }
 
@@ -295,10 +298,25 @@ function loadRefs(){
 }
 function byCode(c){ for(var i=0;i<S.P.length;i++) if(S.P[i].code===c) return S.P[i]; return null; }
 function status(p){
+  if(!p.slots) return {k:"open",t:"открыт набор",left:null};
   var left = p.slots - p.took;
-  if(left<=0) return {k:"shut",t:"набор закрыт"};
-  if(left<=2) return {k:"last",t:"последние места"};
-  return {k:"open",t:"открыт набор"};
+  if(left<=0) return {k:"shut",t:"набор закрыт",left:0};
+  if(left<=2) return {k:"last",t:"последние места",left:left};
+  return {k:"open",t:"открыт набор",left:left};
+}
+/* строка «центр · город · фаза» без пустых разделителей */
+function whereLine(p){
+  var a=[];
+  if(p.site) a.push("<b>"+esc(p.site)+"</b>");
+  if(p.city) a.push(esc(p.city));
+  if(p.phase) a.push(esc(p.phase));
+  return a.join(" · ");
+}
+function placeLine(p){
+  var a=[];
+  if(p.site) a.push(p.site);
+  if(p.city) a.push(p.city);
+  return a.join(", ");
 }
 
 /* ---------- кнопки Telegram ---------- */
@@ -383,15 +401,20 @@ function feed(){
 
   if(!list.length) h+='<div class="empty"><p>По этим фильтрам наборов нет</p><p style="font-size:12.5px">Снимите один из фильтров</p></div>';
   list.forEach(function(p,i){
-    var st=status(p), pct=p.slots?Math.round(p.took/p.slots*100):0;
+    var st=status(p), w=whereLine(p);
     h+='<div class="card" data-p="'+esc(p.code)+'" style="--c:'+nozColor(p.noz)+';animation-delay:'+(i*38)+'ms">'
      + '<div class="toprow"><span class="noz">'+esc(nozLabel(p))+'</span>'
      + '<span class="pill '+(st.k==="last"?"last":st.k==="shut"?"shut":"")+'">'+st.t+'</span></div>'
      + '<h3>'+esc(p.title)+'</h3>'
-     + '<p class="where"><b>'+esc(p.site)+'</b> · '+esc(p.city)+(p.phase?' · '+esc(p.phase):'')+'</p>'
-     + '<div class="bar"><i data-w="'+pct+'"></i></div>'
-     + '<div class="slots"><span>Включено <b>'+p.took+'</b> из <b>'+p.slots+'</b></span>'
-     + '<span>'+(st.k==="shut"?"мест нет":"свободно "+(p.slots-p.took))+'</span></div></div>';
+     + (w?'<p class="where">'+w+'</p>':'');
+    if(p.slots){
+      h+='<div class="bar"><i data-w="'+Math.round(p.took/p.slots*100)+'"></i></div>'
+       + '<div class="slots"><span>Включено <b>'+p.took+'</b> из <b>'+p.slots+'</b></span>'
+       + '<span>'+(st.left?"свободно "+st.left:"мест нет")+'</span></div>';
+    } else if(p.portrait){
+      h+='<p class="where" style="margin:0;color:var(--ink-3)">'+esc(p.portrait.slice(0,95))+(p.portrait.length>95?"…":"")+'</p>';
+    }
+    h+='</div>';
   });
   return h+'</div>';
 }
@@ -421,7 +444,7 @@ function card(p){
    + '<h2>'+esc(p.title)+'</h2>'
    + (p.portrait?'<p class="portrait">'+esc(p.portrait)+'</p>':'')
    + '<dl class="facts">'
-   + '<dt>Центр</dt><dd>'+esc(p.site)+', '+esc(p.city)+'</dd>'
+   + (placeLine(p)?'<dt>Центр</dt><dd>'+esc(placeLine(p))+'</dd>':'')
    + (p.pi?'<dt>Исследователь</dt><dd>'+esc(p.pi)+'</dd>':'')
    + (p.design?'<dt>Дизайн</dt><dd>'+esc(p.design)+'</dd>':'')
    + (p.drug?'<dt>Препарат</dt><dd>'+esc(p.drug)+'</dd>':'')
@@ -430,8 +453,10 @@ function card(p){
    + '</dl>'
    + '<div class="blind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Название препарата, спонсор и номер протокола не раскрываются</div></div>';
 
-  h+='<div class="sect"><h4>Набор</h4><div class="bar" style="--c:'+c+'"><i data-w="'+pct+'"></i></div>'
-   + '<div class="slots"><span>Включено <b>'+p.took+'</b> из <b>'+p.slots+'</b></span><span>'+st.t+'</span></div></div>';
+  if(p.slots){
+    h+='<div class="sect"><h4>Набор</h4><div class="bar" style="--c:'+c+'"><i data-w="'+pct+'"></i></div>'
+     + '<div class="slots"><span>Включено <b>'+p.took+'</b> из <b>'+p.slots+'</b></span><span>'+st.t+'</span></div></div>';
+  }
 
   if(p.crit && p.crit.length){
     var inc=[], exc=[];
@@ -544,7 +569,7 @@ function wizard(){
     var nozs=[]; S.P.forEach(function(p){ if(nozs.indexOf(p.noz)<0) nozs.push(p.noz); });
     h+='<h2>По какому профилю?</h2><p class="q">Только направления, где сейчас идёт набор.</p><div class="opts">';
     nozs.forEach(function(k){
-      var n=S.P.filter(function(p){return p.noz===k&&p.slots>p.took&&w.age>=p.age[0]&&w.age<=p.age[1];}).length;
+      var n=S.P.filter(function(p){return p.noz===k&&status(p).k!=="shut"&&w.age>=p.age[0]&&w.age<=p.age[1];}).length;
       var lbl=NOZNAME[k]||(S.P.filter(function(p){return p.noz===k;})[0]||{}).nozName||k;
       h+='<button class="opt'+(w.noz===k?" on":"")+'" data-n="'+esc(k)+'" style="--c:'+nozColor(k)+'">'
        + '<span class="sw"></span>'+esc(lbl)+'<span class="rt">'+(n?n+" набор":"нет")+'</span></button>';
@@ -582,7 +607,7 @@ function mresult(){
     var s=0;
     if(w.age>=p.age[0]&&w.age<=p.age[1]) s+=55;
     if(p.noz===w.noz) s+=30;
-    if(p.slots>p.took) s+=10;
+    if(status(p).k!=="shut") s+=10;
     if(w.load==="hard"&&/тяж/i.test(p.title)) s+=5;
     if(w.load==="mid"&&/среднетяж/i.test(p.title)) s+=5;
     return {p:p,s:Math.min(s,100)};
@@ -594,7 +619,9 @@ function mresult(){
     var p=x.p,c=nozColor(p.noz);
     h+='<div class="mrow" data-p="'+esc(p.code)+'" style="--c:'+c+';animation-delay:'+(i*55)+'ms">'
      + '<span class="pct" style="color:'+c+'">'+x.s+'%</span>'
-     + '<span class="mi"><b>'+esc(p.title)+'</b><span>'+esc(p.site)+' · '+esc(p.city)+' · свободно '+Math.max(0,p.slots-p.took)+'</span></span></div>';
+     + '<span class="mi"><b>'+esc(p.title)+'</b><span>'
+     + [esc(placeLine(p)), (p.slots?"свободно "+Math.max(0,p.slots-p.took):"")].filter(Boolean).join(" · ")
+     + '</span></span></div>';
   });
   return h+'</div>';
 }
