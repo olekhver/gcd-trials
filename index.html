@@ -241,8 +241,10 @@ body{
 "use strict";
 
 /* ================= НАСТРОЙКА ================= */
-/* Вставьте сюда адрес веб-приложения Apps Script (заканчивается на /exec) */
-var API_URL = "https://script.google.com/macros/s/AKfycbwm7Mx9ffy0cTYIVk-Gp5Dmu7Fizh4EjYBH1eKZRWMU-hL61nSAGsZdK45vQ64XRNjeaQ/exec";
+/* Адрес посредника на Cloudflare — через него приложение говорит с таблицей.
+   Напрямую в Apps Script обращаться нельзя: он отвечает перенаправлением,
+   и браузер не может прочитать ответ при отправке направления. */
+var API_URL = "https://gcd-bot.olekhver.workers.dev";
 /* ============================================= */
 
 var tg = window.Telegram && window.Telegram.WebApp;
@@ -668,8 +670,11 @@ function wireRefer(){
       name:v("f1"), spec:v("f2"), org:v("f3"), contact:v("f4"), caseText:v("f5")
     })}).then(function(r){return r.json();})
       .then(function(d){ notify("success"); S.lastId=(d&&d.id)||""; loadRefs(); go("sent"); })
-      .catch(function(){ notify("error"); btn.disabled=false; btn.textContent="Отправить координатору";
-        alert("Не удалось отправить. Проверьте соединение."); });
+      .catch(function(){
+        notify("error"); btn.disabled=false; btn.textContent="Отправить координатору";
+        alert("Не удалось получить подтверждение. Возможно, направление всё же ушло — "
+            + "загляните в раздел «Направления», прежде чем отправлять повторно.");
+      });
   });
 }
 function sent(){
