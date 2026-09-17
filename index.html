@@ -18,6 +18,7 @@
   --ok:#256b46;--ok-soft:#e0efe7;--stop:#943124;--stop-soft:#f7e6e2;--warn:#8a5a10;--warn-soft:#f8eeda;
   --onc:#6f4a8e;--derm:#a85d2e;--neuro:#2f5f96;--endo:#1b7358;--ibd:#9d4150;--psy:#4c5885;
   --resp:#6b7a2e;--ped:#a8517c;--other:#0f6169;
+  --card-alt:#f5f8f9;
 }
 html[data-dark="1"]{
   --bg:#0f151b;--card:#182028;--card-2:#212b34;--ink:#e6ecf0;--ink-2:#aeb9c3;--ink-3:#7f8d99;
@@ -25,6 +26,7 @@ html[data-dark="1"]{
   --ok:#6dc093;--ok-soft:#152d22;--stop:#e08472;--stop-soft:#33201c;--warn:#d7a648;--warn-soft:#302512;
   --onc:#b18ccb;--derm:#d99a6b;--neuro:#79a6d8;--endo:#5fbf9b;--ibd:#d98a95;--psy:#94a0cd;
   --resp:#b9c46e;--ped:#dd93b8;--other:#54b4bd;
+  --card-alt:#1e2831;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -54,6 +56,7 @@ body{
   margin-bottom:11px;position:relative;overflow:hidden;cursor:pointer;
   transition:transform .14s ease;animation:rise .34s cubic-bezier(.22,.9,.3,1) both}
 .card:active{transform:scale(.982)}
+.card.alt,.mrow.alt,.ref.alt{background:var(--card-alt)}
 .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--accent))}
 @keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
 .toprow{display:flex;align-items:center;gap:8px;margin-bottom:7px}
@@ -212,12 +215,7 @@ body{
 .ref .rh b{font-size:14px;font-weight:600}
 .ref .code{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-3)}
 .ref .rsub{font-size:12px;color:var(--ink-3);margin:0 0 13px}
-.track{display:flex;align-items:center}
-.track .nd{flex:none;width:11px;height:11px;border-radius:50%;background:var(--rule)}
-.track .nd.done,.track .nd.now{background:var(--accent)}
-.track .nd.now{box-shadow:0 0 0 4px var(--accent-soft)}
-.track .ln{flex:1;height:2px;background:var(--rule)}
-.track .ln.done{background:var(--accent)}
+.tracksvg{display:block;width:100%;height:auto}
 .tlabels{display:flex;justify-content:space-between;margin-top:7px}
 .tlabels span{font-size:9.5px;color:var(--ink-3);text-align:center;flex:1;line-height:1.25}
 .tlabels span:first-child{text-align:left}.tlabels span:last-child{text-align:right}
@@ -254,6 +252,10 @@ body{
    Напрямую в Apps Script обращаться нельзя: он отвечает перенаправлением,
    и браузер не может прочитать ответ при отправке направления. */
 var API_URL = "https://gcd-bot.olekhver.workers.dev";
+ 
+/* Метка сборки. Видна внизу вкладки «Направления» — по ней сразу понятно,
+   какая версия реально отдаётся с GitHub, а какая осталась в кэше. */
+var BUILD = "17.09.2026";
 /* ============================================= */
  
 var tg = window.Telegram && window.Telegram.WebApp;
@@ -429,7 +431,7 @@ function feed(){
   if(!list.length) h+='<div class="empty"><p>По этим фильтрам наборов нет</p><p style="font-size:12.5px">Снимите один из фильтров выше</p></div>';
   list.forEach(function(p,i){
     var st=status(p), w=whereLine(p);
-    h+='<div class="card" data-p="'+esc(p.code)+'" style="--c:'+nozColor(p.noz)+';animation-delay:'+(i*38)+'ms">'
+    h+='<div class="card'+(i%2?' alt':'')+'" data-p="'+esc(p.code)+'" style="--c:'+nozColor(p.noz)+';animation-delay:'+(i*38)+'ms">'
      + '<div class="toprow"><span class="noz">'+esc(nozLabel(p))+'</span>'
      + '<span class="pill '+(st.k==="last"?"last":st.k==="shut"?"shut":"")+'">'+st.t+'</span></div>'
      + '<h3>'+esc(p.title)+'</h3>'
@@ -665,7 +667,7 @@ function mresult(){
   if(!list.length) h+='<div class="empty"><p>Подходящих наборов сейчас нет</p><p style="font-size:12.5px">Загляните позже — протоколы открываются каждую неделю</p></div>';
   list.forEach(function(x,i){
     var p=x.p,c=nozColor(p.noz);
-    h+='<div class="mrow" data-p="'+esc(p.code)+'" style="--c:'+c+';animation-delay:'+(i*55)+'ms">'
+    h+='<div class="mrow'+(i%2?' alt':'')+'" data-p="'+esc(p.code)+'" style="--c:'+c+';animation-delay:'+(i*55)+'ms">'
      + '<span class="pct" style="color:'+c+'">'+x.s+'%</span>'
      + '<span class="mi"><b>'+esc(p.title)+'</b><span>'
      + [esc(placeLine(p)), (p.slots?"свободно "+Math.max(0,p.slots-p.took):"")].filter(Boolean).join(" · ")
@@ -758,28 +760,44 @@ function sent(){
 function wireSent(){ document.getElementById("tomine").addEventListener("click",function(){ haptic(); go("mine"); }); }
  
 var STEPS=["Принято","Предскрининг","Скрининг","Рандомизация"];
+function buildTag(){
+  return '<p style="font-size:11px;color:var(--ink-3);opacity:.7;text-align:center;'
+       + 'margin:22px 0 0;font-family:\'JetBrains Mono\',monospace">версия '+BUILD+'</p>';
+}
+ 
+/* Трекер рисуется как SVG: геометрия задана внутри картинки и не зависит
+   от каскада стилей — сломать её перекрывающимся правилом невозможно */
+function trackSvg(step){
+  var xs=[10,103,197,290], cy=11, s='';
+  for(var i=0;i<3;i++){
+    s+='<line x1="'+xs[i]+'" y1="'+cy+'" x2="'+xs[i+1]+'" y2="'+cy+'" stroke-width="2" '
+     + 'stroke="'+(i<step-1?'var(--accent)':'var(--rule)')+'"/>';
+  }
+  for(var j=0;j<4;j++){
+    if(j===step-1) s+='<circle cx="'+xs[j]+'" cy="'+cy+'" r="9" fill="var(--accent-soft)"/>';
+    s+='<circle cx="'+xs[j]+'" cy="'+cy+'" r="5.5" fill="'+(j<=step-1?'var(--accent)':'var(--rule)')+'"/>';
+  }
+  return '<svg class="tracksvg" viewBox="0 0 300 22" aria-hidden="true">'+s+'</svg>';
+}
 function mine(){
   var h='<div class="pad">';
   if(!S.REF.length){
-    return h+'<div class="empty"><p>Направлений пока нет</p><p style="font-size:12.5px">Откройте карточку набора и направьте пациента — статус появится здесь</p></div></div>';
+    return h+'<div class="empty"><p>Направлений пока нет</p><p style="font-size:12.5px">Откройте карточку набора и направьте пациента — статус появится здесь</p></div>'+buildTag()+'</div>';
   }
   h+='<p style="font-size:13px;color:var(--ink-3);margin:2px 0 14px">Статус по каждому направленному случаю. Обезличенно, по внутреннему коду.</p>';
   S.REF.forEach(function(r,i){
     var p=byCode(r.code)||{noz:"other",title:r.code,site:""}, c=nozColor(p.noz);
-    h+='<div class="ref" style="animation-delay:'+(i*45)+'ms">'
+    h+='<div class="ref'+(i%2?' alt':'')+'" style="animation-delay:'+(i*45)+'ms">'
      + '<div class="rh"><span class="noz" style="--c:'+c+'">'+esc(nozLabel(p))+'</span><span class="code">'+esc(r.id)+'</span></div>'
      + '<div class="rh"><b>'+esc(p.title)+'</b></div>'
-     + '<p class="rsub">'+esc(STEPS[Math.min(3,r.step-1)])+(r.note?' · '+esc(r.note):'')+'</p><div class="track">';
-    for(var k=0;k<4;k++){
-      h+='<span class="nd '+(k<r.step-1?"done":k===r.step-1?"now":"")+'"></span>';
-      if(k<3) h+='<span class="ln '+(k<r.step-1?"done":"")+'"></span>';
-    }
-    h+='</div><div class="tlabels">';
+     + '<p class="rsub">'+esc(STEPS[Math.min(3,r.step-1)])+(r.note?' · '+esc(r.note):'')+'</p>'
+     + trackSvg(r.step)
+     + '<div class="tlabels">';
     STEPS.forEach(function(s,k){ h+='<span class="'+(k===r.step-1?"now":"")+'">'+s+'</span>'; });
     h+='</div></div>';
   });
   h+='<p style="font-size:12px;color:var(--ink-3);margin:16px 2px 0;line-height:1.5">Вознаграждение за направление пациентов не предусмотрено и не выплачивается — ст. 74 ФЗ-323.</p>';
-  return h+'</div>';
+  return h+buildTag()+'</div>';
 }
  
 render();
