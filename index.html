@@ -13,20 +13,22 @@
 /* см. строку с API_URL в скрипте ниже */
  
 :root{
-  --bg:#f2f5f6;--card:#fff;--card-2:#eaeff1;--ink:#131a20;--ink-2:#4a5763;--ink-3:#7c8995;
-  --rule:#dde4e8;--accent:#0f6169;--accent-ink:#fff;--accent-soft:#deecee;
+  --bg:#e7edf0;--card:#fff;--card-2:#e4ebee;--ink:#131a20;--ink-2:#4a5763;--ink-3:#7c8995;
+  --rule:#d6dfe4;--accent:#0f6169;--accent-ink:#fff;--accent-soft:#deecee;
+  --shadow:0 1px 2px rgba(18,34,48,.07),0 6px 14px rgba(18,34,48,.05);
   --ok:#256b46;--ok-soft:#e0efe7;--stop:#943124;--stop-soft:#f7e6e2;--warn:#8a5a10;--warn-soft:#f8eeda;
   --onc:#6f4a8e;--derm:#a85d2e;--neuro:#2f5f96;--endo:#1b7358;--ibd:#9d4150;--psy:#4c5885;
   --resp:#6b7a2e;--ped:#a8517c;--other:#0f6169;
-  --card-alt:#edf2f4;
+  --card-alt:#f1f5f7;
 }
 html[data-dark="1"]{
-  --bg:#0e141a;--card:#222d37;--card-2:#2e3a45;--ink:#eaf0f4;--ink-2:#b8c3cd;--ink-3:#8b98a4;
-  --rule:#3a4650;--accent:#5cbfc8;--accent-ink:#06282c;--accent-soft:#173b44;
+  --bg:#080d12;--card:#1e2833;--card-2:#2b3743;--ink:#eaf0f4;--ink-2:#b8c3cd;--ink-3:#8b98a4;
+  --rule:#3a4854;--accent:#5cbfc8;--accent-ink:#06282c;--accent-soft:#173b44;
+  --shadow:0 1px 2px rgba(0,0,0,.55),0 8px 20px rgba(0,0,0,.38);
   --ok:#6dc093;--ok-soft:#152d22;--stop:#e08472;--stop-soft:#33201c;--warn:#d7a648;--warn-soft:#302512;
   --onc:#b18ccb;--derm:#d99a6b;--neuro:#79a6d8;--endo:#5fbf9b;--ibd:#d98a95;--psy:#94a0cd;
   --resp:#b9c46e;--ped:#dd93b8;--other:#54b4bd;
-  --card-alt:#2c3843;
+  --card-alt:#28343f;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -53,7 +55,7 @@ body{
 .chip.on.dot::before{background:var(--accent-ink)}
  
 .card{background:var(--card);border:1px solid var(--rule);border-radius:15px;padding:14px 15px;
-  margin-bottom:11px;position:relative;overflow:hidden;cursor:pointer;
+  margin-bottom:13px;box-shadow:var(--shadow);position:relative;overflow:hidden;cursor:pointer;
   transition:transform .14s ease;animation:rise .34s cubic-bezier(.22,.9,.3,1) both}
 .card:active{transform:scale(.982)}
 .card.alt,.mrow.alt,.ref.alt{background:var(--card-alt)}
@@ -180,7 +182,7 @@ body{
 .rngval small{font-size:15px;color:var(--ink-3);font-weight:400;font-family:"Golos Text",sans-serif}
  
 .mrow{display:flex;align-items:center;gap:12px;padding:13px 14px;background:var(--card);border:1px solid var(--rule);
-  border-radius:14px;margin-bottom:9px;cursor:pointer;animation:rise .4s cubic-bezier(.22,.9,.3,1) both;
+  border-radius:14px;margin-bottom:10px;box-shadow:var(--shadow);cursor:pointer;animation:rise .4s cubic-bezier(.22,.9,.3,1) both;
   position:relative;overflow:hidden}
 .mrow::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c)}
 .mrow .pct{flex:none;font-family:"JetBrains Mono",monospace;font-size:15px;font-weight:600;width:44px;
@@ -209,7 +211,8 @@ body{
 .done p{font-size:13.5px;color:var(--ink-3);margin:0 auto 22px;max-width:30ch;line-height:1.55}
 .done .code{font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--accent);margin-bottom:22px}
  
-.ref{background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:13px 15px;margin-bottom:11px;
+.ref{background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:13px 15px;margin-bottom:12px;
+  box-shadow:var(--shadow);
   animation:rise .34s cubic-bezier(.22,.9,.3,1) both}
 .ref .rh{display:flex;align-items:center;gap:8px;margin-bottom:3px}
 .ref .rh b{font-size:14px;font-weight:600}
@@ -255,7 +258,7 @@ var API_URL = "https://gcd-bot.olekhver.workers.dev";
  
 /* Метка сборки. Видна внизу вкладки «Направления» — по ней сразу понятно,
    какая версия реально отдаётся с GitHub, а какая осталась в кэше. */
-var BUILD = "17.09.2026-2";
+var BUILD = "17.09.2026-3";
 /* ============================================= */
  
 var tg = window.Telegram && window.Telegram.WebApp;
