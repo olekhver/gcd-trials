@@ -17,14 +17,14 @@
   --rule:#dde4e8;--accent:#0f6169;--accent-ink:#fff;--accent-soft:#deecee;
   --ok:#256b46;--ok-soft:#e0efe7;--stop:#943124;--stop-soft:#f7e6e2;--warn:#8a5a10;--warn-soft:#f8eeda;
   --onc:#6f4a8e;--derm:#a85d2e;--neuro:#2f5f96;--endo:#1b7358;--ibd:#9d4150;--psy:#4c5885;
-  --resp:#6b7a2e;--other:#0f6169;
+  --resp:#6b7a2e;--ped:#a8517c;--other:#0f6169;
 }
 html[data-dark="1"]{
   --bg:#0f151b;--card:#182028;--card-2:#212b34;--ink:#e6ecf0;--ink-2:#aeb9c3;--ink-3:#7f8d99;
   --rule:#2a343d;--accent:#54b4bd;--accent-ink:#06282c;--accent-soft:#12323a;
   --ok:#6dc093;--ok-soft:#152d22;--stop:#e08472;--stop-soft:#33201c;--warn:#d7a648;--warn-soft:#302512;
   --onc:#b18ccb;--derm:#d99a6b;--neuro:#79a6d8;--endo:#5fbf9b;--ibd:#d98a95;--psy:#94a0cd;
-  --resp:#b9c46e;--other:#54b4bd;
+  --resp:#b9c46e;--ped:#dd93b8;--other:#54b4bd;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -125,7 +125,10 @@ body{
   display:grid;place-items:center;background:var(--card);transition:all .2s cubic-bezier(.3,1.5,.5,1)}
 .crit li.on .box{background:var(--ok);border-color:var(--ok);transform:scale(1.06)}
 .crit li.hit .box{background:var(--stop);border-color:var(--stop);transform:scale(1.06)}
-.box svg{width:12px;height:12px;stroke:#fff;stroke-width:3;opacity:0;transition:opacity .16s}
+/* обе иконки лежат в одной ячейке сетки, а не в двух строках — иначе
+   крестик выдавливает вниз за пределы квадрата */
+.box svg{grid-area:1/1;width:12px;height:12px;stroke:#fff;stroke-width:3;
+  opacity:0;transition:opacity .16s}
 .crit li.on .box svg.tick,.crit li.hit .box svg.cross{opacity:1}
 .crit .txt{font-size:13.5px;line-height:1.45;color:var(--ink-2)}
 .crit .txt em{font-style:normal;color:var(--ink-3);font-size:12px;display:block;margin-top:2px}
@@ -270,7 +273,15 @@ function uid(){ try{ return tg.initDataUnsafe.user.id; }catch(e){ return ""; } }
 function uname(){ try{ var u=tg.initDataUnsafe.user; return ((u.first_name||"")+" "+(u.last_name||"")).trim(); }catch(e){ return ""; } }
  
 var NOZNAME = {ibd:"ВЗК",derm:"Дерматология",neuro:"Неврология",onc:"Онкология",
-               endo:"Эндокринология",psy:"Психиатрия",resp:"Пульмонология",other:"Другое"};
+               endo:"Эндокринология",psy:"Психиатрия",resp:"Пульмонология",
+               ped:"Педиатрия",other:"Другое"};
+/* «1 год», «3 года», «12 лет» */
+function years(n){
+  var a=n%10, b=n%100;
+  if(a===1 && b!==11) return "год";
+  if(a>=2 && a<=4 && (b<10 || b>20)) return "года";
+  return "лет";
+}
 function nozColor(k){ return "var(--"+(NOZNAME[k]?k:"other")+")"; }
 function nozLabel(p){ return p.nozName || NOZNAME[p.noz] || "Исследование"; }
  
@@ -596,9 +607,9 @@ function wizard(){
   for(var i=0;i<3;i++) h+='<i class="'+(i<=w.step?"on":"")+'"></i>';
   h+='</div>';
   if(w.step===0){
-    h+='<h2>Сколько лет пациенту?</h2><p class="q">Возраст отсекает большую часть протоколов сразу.</p>'
-     + '<p class="rngval" id="av">'+w.age+' <small>лет</small></p>'
-     + '<input class="rng" type="range" id="age" min="18" max="85" value="'+w.age+'">';
+    h+='<h2>Сколько лет пациенту?</h2><p class="q">Возраст отсекает большую часть протоколов сразу. Есть и педиатрические наборы — шкала начинается с года.</p>'
+     + '<p class="rngval" id="av">'+w.age+' <small>'+years(w.age)+'</small></p>'
+     + '<input class="rng" type="range" id="age" min="1" max="85" value="'+w.age+'">';
   } else if(w.step===1){
     var nozs=[]; S.P.forEach(function(p){ if(nozs.indexOf(p.noz)<0) nozs.push(p.noz); });
     h+='<h2>По какому профилю?</h2><p class="q">Только направления, где сейчас идёт набор.</p><div class="opts">';
@@ -622,7 +633,10 @@ function wizard(){
 }
 function wireWizard(){
   var w=S.wz, a=document.getElementById("age");
-  if(a) a.addEventListener("input",function(){ w.age=+a.value; document.getElementById("av").innerHTML=w.age+' <small>лет</small>'; });
+  if(a) a.addEventListener("input",function(){
+    w.age=+a.value;
+    document.getElementById("av").innerHTML=w.age+' <small>'+years(w.age)+'</small>';
+  });
   view.querySelectorAll(".opt").forEach(function(b){
     b.addEventListener("click",function(){
       haptic();
@@ -647,7 +661,7 @@ function mresult(){
     return {p:p,s:Math.min(s,100)};
   }).filter(function(x){return x.s>=60;}).sort(function(a,b){return b.s-a.s;});
  
-  var h='<div class="pad"><p style="font-size:13px;color:var(--ink-3);margin:2px 0 14px">Пациент '+w.age+' лет. Процент — формальное соответствие возрасту, профилю и наличию мест, а не прогноз включения.</p>';
+  var h='<div class="pad"><p style="font-size:13px;color:var(--ink-3);margin:2px 0 14px">Пациент '+w.age+' '+years(w.age)+'. Процент — формальное соответствие возрасту, профилю и наличию мест, а не прогноз включения.</p>';
   if(!list.length) h+='<div class="empty"><p>Подходящих наборов сейчас нет</p><p style="font-size:12.5px">Загляните позже — протоколы открываются каждую неделю</p></div>';
   list.forEach(function(x,i){
     var p=x.p,c=nozColor(p.noz);
@@ -674,16 +688,53 @@ function refer(p){
    + '<div class="fld"><label>Ваше имя и отчество</label><input id="f1" value="'+esc(uname())+'" placeholder="Ирина Петровна"></div>'
    + '<div class="fld"><label>Специальность</label><input id="f2" placeholder="Гастроэнтеролог"></div>'
    + '<div class="fld"><label>Медицинская организация</label><input id="f3" placeholder="ГП №25, Санкт-Петербург"></div>'
-   + '<div class="fld"><label>Телефон для связи с вами</label><input id="f4" inputmode="tel" placeholder="+7 ___ ___ __ __"></div>'
+   + '<div class="fld"><label>Телефон для связи с вами</label><input id="f4" inputmode="tel" autocomplete="tel"></div>'
    + '<div class="fld"><label>Обезличенное описание случая</label><textarea id="f5" placeholder="Мужчина 46 лет, диагноз 4 года, два курса ГКС без стойкого эффекта, биологическую терапию не получал"></textarea></div>'
    + '<p style="font-size:11.5px;color:var(--ink-3);margin:0;line-height:1.45">Отправляя форму, вы соглашаетесь на обработку ваших персональных данных для связи по этому направлению.</p>'
    + '</div><div class="mainbtn"><button class="btn" id="send">Отправить координатору</button></div>';
 }
+/* Десять цифр номера без кода страны. Ведущие 7 или 8 отбрасываются,
+   чтобы работала и вставка «+7 966…», и «8 966…», и просто «966…» */
+function phoneDigits(v){
+  var d=String(v).replace(/\D/g,"");
+  if(d.charAt(0)==="7"||d.charAt(0)==="8") d=d.slice(1);
+  return d.slice(0,10);
+}
+function phoneFormat(d){
+  var s="+7";
+  if(d.length) s+=" "+d.slice(0,3);
+  if(d.length>3) s+=" "+d.slice(3,6);
+  if(d.length>6) s+="-"+d.slice(6,8);
+  if(d.length>8) s+="-"+d.slice(8,10);
+  return s;
+}
+function maskPhone(el){
+  var redraw=function(){
+    el.value=phoneFormat(phoneDigits(el.value));
+    var p=el.value.length;
+    try{ el.setSelectionRange(p,p); }catch(e){}
+  };
+  el.value="+7 ";
+  el.addEventListener("input",redraw);
+  el.addEventListener("focus",function(){
+    if(!phoneDigits(el.value)) el.value="+7 ";
+    var p=el.value.length;
+    try{ el.setSelectionRange(p,p); }catch(e){}
+  });
+}
+ 
 function wireRefer(){
   var btn=document.getElementById("send");
+  maskPhone(document.getElementById("f4"));
   btn.addEventListener("click",function(){
     var v=function(id){ return document.getElementById(id).value.trim(); };
-    if(!v("f1")||!v("f4")||!v("f5")){ notify("error"); alert("Заполните имя, телефон и описание случая."); return; }
+    if(!v("f1")||!v("f5")){ notify("error"); alert("Заполните имя и описание случая."); return; }
+    if(phoneDigits(v("f4")).length!==10){
+      notify("error");
+      document.getElementById("f4").focus();
+      alert("Телефон указан не полностью — нужно десять цифр после +7.");
+      return;
+    }
     btn.disabled=true; btn.textContent="Отправляем…";
     fetch(API_URL,{method:"POST",body:JSON.stringify({
       action:"refer", code:S.ctx, uid:uid(),
